@@ -16,17 +16,21 @@ package node
 
 import (
 	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/dappledger/AnnChain/ann-module/lib/go-crypto"
-
+	"github.com/AnnChain/delos/za-delos/eth/rlp"
 	at "github.com/dappledger/AnnChain/angine/types"
+	"github.com/dappledger/AnnChain/ann-module/lib/go-crypto"
 	rpc "github.com/dappledger/AnnChain/ann-module/lib/go-rpc/server"
+	"github.com/dappledger/AnnChain/ann-module/lib/go-wire"
 	"github.com/dappledger/AnnChain/genesis/chain/version"
+	"github.com/dappledger/AnnChain/genesis/types"
 )
 
 const ChainIDArg = "chainid"
@@ -97,11 +101,12 @@ func (n *Node) rpcRoutes() map[string]*rpc.RPCFunc {
 		"query_ledger_transactions":         rpc.NewRPCFunc(h.QueryLedgerTransactions, argsWithChainID("height,order,limit,cursor")),
 
 		//Execute RPC
-		"create_account":   rpc.NewRPCFunc(h.BroadcastTx, argsWithChainID("tx")),
-		"payment":          rpc.NewRPCFunc(h.BroadcastTx, argsWithChainID("tx")),
-		"manage_data":      rpc.NewRPCFunc(h.BroadcastTx, argsWithChainID("tx")),
-		"create_contract":  rpc.NewRPCFunc(h.BroadcastTx, argsWithChainID("tx")),
-		"execute_contract": rpc.NewRPCFunc(h.BroadcastTx, argsWithChainID("tx")),
+		"create_account":     rpc.NewRPCFunc(h.BroadcastTx, argsWithChainID("tx")),
+		"payment":            rpc.NewRPCFunc(h.BroadcastTx, argsWithChainID("tx")),
+		"manage_data":        rpc.NewRPCFunc(h.BroadcastTx, argsWithChainID("tx")),
+		"create_contract":    rpc.NewRPCFunc(h.BroadcastTx, argsWithChainID("tx")),
+		"execute_contract":   rpc.NewRPCFunc(h.BroadcastTx, argsWithChainID("tx")),
+		"request_special_op": rpc.NewRPCFunc(h.RequestSpecialOP, argsWithChainID("tx")),
 	}
 }
 
@@ -290,6 +295,64 @@ func (h *rpcHandler) BroadcastTx(tx []byte) ([]byte, at.CodeType, error) {
 		return nil, at.CodeType_InvalidTx, err
 	}
 
+	return nil, at.CodeType_OK, nil
+}
+
+func (h *rpcHandler) RequestSpecialOP(tx []byte) ([]byte, at.CodeType, error) {
+	var tdata types.SpencialOp
+	var power uint64
+
+	if err := json.Unmarshal(tx, &tdata); err != nil {
+		return nil, at.CodeType_JsonUnmarshalError, errors.New("tx Unmarshal error")
+	}
+
+	if tdata.ValidatorPub == "" {
+		return nil, at.CodeType_ValidatorPubError, errors.New("ValidatorPub Can not be empty")
+
+	}
+
+	switch tdata.OpCode {
+	case 1:
+		power = 100
+	case 0:
+		power = 0
+	default:
+		return nil, at.CodeType_InvalidTx, nil
+	}
+
+	vb := wire.JSONBytes(at.ValidatorAttr{
+		PubKey:     []byte(tdata.ValidatorPub),
+		Power:      power,
+		IsCA:       tdata.IsCA,
+		RPCAddress: tdata.RpcAddress,
+	})
+
+	cmd := &at.SpecialOPCmd{
+		CmdCode: at.SpecialOP,
+		CmdType: at.SpecialOP_ChangeValidator,
+		Msg:     vb,
+		Time:    time.Now(),
+		//Nonce:		0,
+	}
+
+	for _, sig := range tdata.Sigs {
+		sigb, err := hex.DecodeString(sig)
+		if err != nil {
+			return nil, at.CodeType_InvalidTx, nil
+		}
+		cmd.Sigs = append(cmd.Sigs, sigb)
+	}
+
+	var rawbytes []byte
+	if err := rlp.DecodeBytes(rawbytes, &vb); err != nil {
+		return nil, at.CodeType_WrongRLP, nil
+	}
+
+	cmdbytes := at.TagSpecialOPTx(rawbytes)
+
+	if err := h.node.Angine.ProcessSpecialOP(cmdbytes); err != nil {
+		return nil, at.CodeType_InvalidTx, err
+	}
 	return nil, at.CodeType_OK, nil
 }
 
