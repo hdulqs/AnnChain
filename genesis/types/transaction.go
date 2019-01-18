@@ -128,17 +128,6 @@ func NewTransaction(nonce, basefee, from, to, optype, memo, op string) *Transact
 	return &Transaction{Data: d}
 }
 
-//func NewRequestSpecialOP(isca bool, opcode int8, sigs, validatorpub, rpcaddress string) *Transaction {
-//	d := RequestSpecialOP{
-//		IsCA:         isca,
-//		OpCode:       opcode,
-//		Sigs:         sigs,
-//		ValidatorPub: validatorpub,
-//		RpcAddress:   rpcaddress,
-//	}
-//	return &Transaction{Rso: d}
-//}
-
 // DecodeRLP implements rlp.Encoder
 func (tx *Transaction) EncodeRLP(w io.Writer) error {
 	return rlp.Encode(w, &tx.Data)
