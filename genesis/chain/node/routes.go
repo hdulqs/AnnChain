@@ -24,12 +24,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/AnnChain/delos/za-delos/eth/rlp"
 	at "github.com/dappledger/AnnChain/angine/types"
 	"github.com/dappledger/AnnChain/ann-module/lib/go-crypto"
 	rpc "github.com/dappledger/AnnChain/ann-module/lib/go-rpc/server"
 	"github.com/dappledger/AnnChain/ann-module/lib/go-wire"
 	"github.com/dappledger/AnnChain/genesis/chain/version"
+	"github.com/dappledger/AnnChain/genesis/eth/rlp"
 	"github.com/dappledger/AnnChain/genesis/types"
 )
 
