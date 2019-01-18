@@ -314,7 +314,7 @@ func (h *rpcHandler) RequestSpecialOP(tx []byte) ([]byte, at.CodeType, error) {
 		return nil, at.CodeType_BaseInvalidSignature, errors.New("check sig fail")
 	}
 
-	if err := json.Unmarshal(trans.GetOperation(), tdata); err != nil {
+	if err := json.Unmarshal(trans.GetOperation(), &tdata); err != nil {
 		return nil, at.CodeType_JsonUnmarshalError, errors.New("tx Unmarshal error")
 	}
 
