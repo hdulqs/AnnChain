@@ -49,9 +49,9 @@ type QueryContract struct {
 }
 
 type SpencialOp struct {
-	IsCA         bool     `json:"isCA"`
-	ValidatorPub string   `json:"validator_pubkey"`
-	Sigs         []string `json:"sigs"`
-	OpCode       int8     `json:"opcode"`
-	RpcAddress   string   `json:"rpcaddress"`
+	IsCA         bool   `json:"isCA"`
+	ValidatorPub string `json:"validator_pubkey"`
+	Sigs         string `json:"sigs"`
+	OpCode       int8   `json:"opcode"`
+	RpcAddress   string `json:"rpcaddress"`
 }

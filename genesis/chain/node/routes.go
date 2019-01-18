@@ -299,10 +299,22 @@ func (h *rpcHandler) BroadcastTx(tx []byte) ([]byte, at.CodeType, error) {
 }
 
 func (h *rpcHandler) RequestSpecialOP(tx []byte) ([]byte, at.CodeType, error) {
+
+	var trans types.Transaction
+
 	var tdata types.SpencialOp
+
 	var power uint64
 
-	if err := json.Unmarshal(tx, &tdata); err != nil {
+	if err := rlp.DecodeBytes(tx, &trans); err != nil {
+		return nil, at.CodeType_WrongRLP, errors.New("wrong rlp encode")
+	}
+
+	if err := trans.CheckSig(); err != nil {
+		return nil, at.CodeType_BaseInvalidSignature, errors.New("check sig fail")
+	}
+
+	if err := json.Unmarshal(trans.GetOperation(), &tdata); err != nil {
 		return nil, at.CodeType_JsonUnmarshalError, errors.New("tx Unmarshal error")
 	}
 
@@ -335,13 +347,11 @@ func (h *rpcHandler) RequestSpecialOP(tx []byte) ([]byte, at.CodeType, error) {
 		//Nonce:		0,
 	}
 
-	for _, sig := range tdata.Sigs {
-		sigb, err := hex.DecodeString(sig)
-		if err != nil {
-			return nil, at.CodeType_InvalidTx, nil
-		}
-		cmd.Sigs = append(cmd.Sigs, sigb)
+	sigb, err := hex.DecodeString(tdata.Sigs)
+	if err != nil {
+		return nil, at.CodeType_InvalidTx, nil
 	}
+	cmd.Sigs = append(cmd.Sigs, sigb)
 
 	var rawbytes []byte
 	if err := rlp.DecodeBytes(rawbytes, &vb); err != nil {

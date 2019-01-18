@@ -40,7 +40,16 @@ var (
 	nForBigdata = big.NewInt(5)
 )
 
+type RequestSpecialOP struct {
+	IsCA         bool
+	ValidatorPub string
+	Sigs         string
+	OpCode       int8
+	RpcAddress   string
+}
+
 type Transaction struct {
+	Rso  RequestSpecialOP
 	Data TxData
 	// caches
 	creatime uint64
@@ -118,6 +127,17 @@ func NewTransaction(nonce, basefee, from, to, optype, memo, op string) *Transact
 	}
 	return &Transaction{Data: d}
 }
+
+//func NewRequestSpecialOP(isca bool, opcode int8, sigs, validatorpub, rpcaddress string) *Transaction {
+//	d := RequestSpecialOP{
+//		IsCA:         isca,
+//		OpCode:       opcode,
+//		Sigs:         sigs,
+//		ValidatorPub: validatorpub,
+//		RpcAddress:   rpcaddress,
+//	}
+//	return &Transaction{Rso: d}
+//}
 
 // DecodeRLP implements rlp.Encoder
 func (tx *Transaction) EncodeRLP(w io.Writer) error {
