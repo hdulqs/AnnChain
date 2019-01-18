@@ -44,13 +44,13 @@ type RequestSpecialOP struct {
 	IsCA         bool
 	ValidatorPub string
 	Sigs         string
-	OpCode       int8
+	OpCode       uint8
 	RpcAddress   string
 }
 
 type Transaction struct {
-	Rso  RequestSpecialOP
 	Data TxData
+	Rso  RequestSpecialOP
 	// caches
 	creatime uint64
 	option   OperatorItfc

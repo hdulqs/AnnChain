@@ -306,7 +306,7 @@ func (h *rpcHandler) RequestSpecialOP(tx []byte) ([]byte, at.CodeType, error) {
 
 	var power uint64
 
-	if err := rlp.DecodeBytes(tx, &trans); err != nil {
+	if err := rlp.DecodeBytes(tx, &trans.Data); err != nil {
 		return nil, at.CodeType_WrongRLP, errors.New("wrong rlp encode")
 	}
 
@@ -344,24 +344,19 @@ func (h *rpcHandler) RequestSpecialOP(tx []byte) ([]byte, at.CodeType, error) {
 		CmdType: at.SpecialOP_ChangeValidator,
 		Msg:     vb,
 		Time:    time.Now(),
-		//Nonce:		0,
 	}
-
+	fmt.Println(tdata.Sigs)
 	sigb, err := hex.DecodeString(tdata.Sigs)
 	if err != nil {
 		return nil, at.CodeType_InvalidTx, nil
 	}
 	cmd.Sigs = append(cmd.Sigs, sigb)
 
-	var rawbytes []byte
-	if err := rlp.DecodeBytes(rawbytes, &vb); err != nil {
-		return nil, at.CodeType_WrongRLP, nil
-	}
-
-	cmdbytes := at.TagSpecialOPTx(rawbytes)
+	bytCmd, _ := json.Marshal(cmd)
+	cmdbytes := at.TagSpecialOPTx(bytCmd)
 
 	if err := h.node.Angine.ProcessSpecialOP(cmdbytes); err != nil {
-		return nil, at.CodeType_InvalidTx, err
+		return nil, at.CodeType_InvalidTx, errors.New("send Angine tx is invalid")
 	}
 	return nil, at.CodeType_OK, nil
 }
