@@ -16,6 +16,7 @@ package datamanager
 
 import (
 	"database/sql"
+	"math/big"
 	"strconv"
 
 	"github.com/dappledger/AnnChain/genesis/chain/database"
@@ -132,7 +133,7 @@ func (m *DataManager) QuerySingleTx(txhash *ethcmn.Hash) (*types.TransactionData
 		TxHash:          ethcmn.HexToHash(r.TxHash),
 		LedgerHash:      ethcmn.StringToLedgerHash(r.LedgerHash),
 		Height:          ethcmn.Big(r.Height),
-		CreateDate:      r.CreateDate,
+		CreateDate:      big.NewInt(r.CreateDate),
 		Account:         ethcmn.HexToAddress(r.Account),
 		AccountSequence: ethcmn.Big(r.AccountSequence),
 		FeePaid:         ethcmn.Big(r.FeePaid),

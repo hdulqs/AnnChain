@@ -211,7 +211,7 @@ func (s TxByNonce) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
 func (tx *Transaction) GetDBTxData(exeRes error) *TransactionData {
 	d := &TransactionData{
 		TxHash:          tx.SigHash(),
-		CreateDate:      time.Now().UnixNano(),
+		CreateDate:      big.NewInt(time.Now().UnixNano()),
 		Account:         tx.GetFrom(),
 		Target:          tx.GetTo(),
 		OpType:          tx.GetOpName(),

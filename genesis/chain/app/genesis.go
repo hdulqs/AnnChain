@@ -16,6 +16,7 @@ package app
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"path/filepath"
@@ -25,7 +26,6 @@ import (
 
 	"encoding/binary"
 	"encoding/hex"
-	"strconv"
 
 	at "github.com/dappledger/AnnChain/angine/types"
 	cmn "github.com/dappledger/AnnChain/ann-module/lib/go-common"
@@ -65,9 +65,13 @@ type LastBlockInfo struct {
 }
 
 type blockExeInfo struct {
-	txDatas        []*types.TransactionData
+	TxDatas        []*types.TransactionData
 	effectG        []*types.EffectGroup
-	inflationOccur bool
+	InflationOccur bool
+}
+
+type BlockActions struct {
+	ActionDatas []types.ActionData
 }
 
 type stateDup struct {
@@ -77,6 +81,14 @@ type stateDup struct {
 	state    *state.StateDB
 	stateMtx *sync.Mutex
 	receipts []*types.Receipt
+}
+
+// TxLookupEntry is a positional metadata to help looking up the data content of
+// a transaction or receipt given only its hash.
+type TxLookupEntry struct {
+	BlockHash  ethcmn.LedgerHash
+	BlockIndex uint64
+	Index      uint64
 }
 
 type GenesisApp struct {
@@ -90,7 +102,10 @@ type GenesisApp struct {
 
 	blockExeInfo *blockExeInfo
 
-	chainDb ethdb.Database // Block chain database
+	blockActions *BlockActions
+
+	chainDb   ethdb.Database // Block Header database
+	chainTxDb ethdb.Database // Block tx database
 
 	tmpStateDup *stateDup
 
@@ -111,6 +126,12 @@ var (
 	ReceiptsPrefix = []byte("receipts-")
 	lastBlockKey   = []byte("lastblock")
 	logger         *zap.Logger
+
+	headerNumberPrefix = []byte("H") // headerNumberPrefix + hash -> num (uint64 big endian)
+	headerPrefix       = []byte("h") // headerPrefix + num (uint64 big endian) + hash -> header
+	headerHashSuffix   = []byte("n") // headerPrefix + num (uint64 big endian) + headerHashSuffix -> hash
+	blockBodyPrefix    = []byte("b") // blockBodyPrefix + num (uint64 big endian) + hash -> block body
+	txLookupPrefix     = []byte("l") // txLookupPrefix + hash -> transaction/receipt lookup metadata
 )
 
 func init() {}
@@ -150,6 +171,10 @@ func NewGenesisApp(config cfg.Config, _logger *zap.Logger) *GenesisApp {
 		config: config,
 	}
 
+	if app.chainTxDb, err = OpenDatabase(datadir, "chaintxdata", LDatabaseCache, LDatabaseHandles); err != nil {
+		cmn.PanicCrisis(err)
+	}
+
 	if app.chainDb, err = OpenDatabase(datadir, "chaindata", LDatabaseCache, LDatabaseHandles); err != nil {
 		cmn.PanicCrisis(err)
 	}
@@ -166,6 +191,7 @@ func NewGenesisApp(config cfg.Config, _logger *zap.Logger) *GenesisApp {
 	}
 
 	app.blockExeInfo = &blockExeInfo{}
+	app.blockActions = &BlockActions{}
 
 	lastBlockTotalCoin, _ := big.NewInt(0).SetString(lastBlock.TotalCoin, 10)
 
@@ -243,7 +269,8 @@ func (app *GenesisApp) Start() {
 
 func (app *GenesisApp) Stop() {
 	app.chainDb.Close()
-	app.dataM.Close()
+	app.chainTxDb.Close()
+	//	app.dataM.Close()
 }
 
 func (app *GenesisApp) makeTempHeader(block *at.Block) {
@@ -334,8 +361,9 @@ func (app *GenesisApp) ExecuteTx(stateDup *stateDup, bs []byte) (err error) {
 
 	// log execute result
 	txData := tx.GetDBTxData(err)
+	txData.Height = app.currentHeader.Height
 
-	app.blockExeInfo.txDatas = append(app.blockExeInfo.txDatas, txData)
+	app.blockExeInfo.TxDatas = append(app.blockExeInfo.TxDatas, txData)
 
 	// check executing result
 	if err != nil {
@@ -356,21 +384,13 @@ func (app *GenesisApp) ExecuteTx(stateDup *stateDup, bs []byte) (err error) {
 	app.txCache.Delete(string(bs))
 
 	// Collect operations and effects
-	action, effects := tx.GetOperatorItfc().GetOperationEffects()
+	action := tx.GetOperatorItfc().GetAction()
 
 	action.GetActionBase().CreateAt = tx.GetCreateTime()
-
 	action.GetActionBase().TxHash = tx.Hash()
-
-	for idx := range effects {
-		effects[idx].GetEffectBase().CreateAt = tx.GetCreateTime()
-		effects[idx].GetEffectBase().TxHash = tx.Hash()
-	}
-
-	app.blockExeInfo.effectG = append(app.blockExeInfo.effectG, &types.EffectGroup{
-		Action:  action,
-		Effects: effects,
-	})
+	action.GetActionBase().Height = app.currentHeader.Height
+	jsonData, err := json.Marshal(action)
+	app.blockActions.ActionDatas = append(app.blockActions.ActionDatas, types.ActionData{ActionID: 0, JSONData: string(jsonData)})
 
 	app.tempHeader.Feepool = app.tempHeader.Feepool.Add(app.tempHeader.Feepool, txData.FeePaid)
 	app.tempHeader.TotalCoin = app.tempHeader.TotalCoin.Sub(app.tempHeader.TotalCoin, txData.FeePaid)
@@ -435,14 +455,22 @@ func (app *GenesisApp) OnCommit(height, round int, block *at.Block) (interface{}
 	app.currentHeader.StateRoot = stateRoot
 
 	appHash := app.currentHeader.Hash()
-	app.SaveLastBlock(appHash, app.currentHeader)
 
-	err = app.SaveDBData()
+	app.SaveLastBlock(appHash, app.currentHeader)
+	ledgerHeader := app.currentHeader.GetLedgerHeaderData()
+	err = app.SaveTxLookupEntries()
+	app.WriteHeaderCanonicalHash(appHash, app.currentHeader.Height)
+	app.WriteBody(appHash, app.currentHeader.Height, app.blockActions)
+	app.SaveLastBlockHeader(appHash, ledgerHeader)
+
+	//	err = app.SaveDBData()
+
 	if err != nil {
 		logger.Error("Save db data failed:" + err.Error())
 	}
 
 	app.blockExeInfo = &blockExeInfo{}
+	app.blockActions = &BlockActions{}
 
 	app.stateAppMtx.Lock()
 	app.stateApp, err = app.tmpStateDup.state.New(stateRoot)
@@ -487,76 +515,93 @@ func (app *GenesisApp) SaveReceipts(stdup *stateDup) []byte {
 }
 
 // SaveDBData save data into sql-db
-func (app *GenesisApp) SaveDBData() error {
-	// begin dbtx
-	err := app.dataM.QTxBegin()
-	if err != nil {
-		return err
-	}
+//func (app *GenesisApp) SaveDBData() error {
+//	for _, a := range app.blockExeInfo.effectG {
+//		a.Action.GetActionBase().Height = app.currentHeader.Height
+//		fmt.Println("=========================action:", a.Action)
+//	}
 
-	// Save ledgerheader
-	ledgerHeader := app.currentHeader.GetLedgerHeaderData()
-	_, err = app.dataM.AddLedgerHeaderData(ledgerHeader)
-	if err != nil {
-		app.dataM.QTxRollback()
-		return err
-	}
-	stmt, err := app.dataM.PrepareTransaction()
-	if err != nil {
-		app.dataM.QTxRollback()
-		return err
-	}
-	for _, v := range app.blockExeInfo.txDatas {
-		v.LedgerHash = ethcmn.BytesToLedgerHash(app.currentHeader.Hash())
-		v.Height = app.currentHeader.Height
-		err = app.dataM.AddTransactionStmt(stmt, v)
-		if err != nil {
-			app.dataM.QTxRollback()
-			return err
-		}
-	}
-	stmt.Close()
+// begin dbtx
+//	err := app.dataM.QTxBegin()
+//	if err != nil {
+//		return err
+//	}
 
-	//save action
-	stmt, err = app.dataM.PrepareAction()
-	if err != nil {
-		app.dataM.QTxRollback()
-		return err
-	}
-	for _, a := range app.blockExeInfo.effectG {
-		a.Action.GetActionBase().Height = app.currentHeader.Height
-		err = app.dataM.AddActionDataStmt(stmt, a.Action)
-		if err != nil {
-			app.dataM.QTxRollback()
-			return err
-		}
-	}
-	stmt.Close()
+// Save ledgerheader
+//	ledgerHeader := app.currentHeader.GetLedgerHeaderData()
+//	_, err = app.dataM.AddLedgerHeaderData(ledgerHeader)
+//	if err != nil {
+//		app.dataM.QTxRollback()
+//		return err
+//	}
+//	stmt, err := app.dataM.PrepareTransaction()
+//	if err != nil {
+//		app.dataM.QTxRollback()
+//		return err
+//	}
+//	for _, v := range app.blockExeInfo.TxDatas {
+//		v.LedgerHash = ethcmn.BytesToLedgerHash(app.currentHeader.Hash())
+//		v.Height = app.currentHeader.Height
+//		err = app.dataM.AddTransactionStmt(stmt, v)
+//		if err != nil {
+//			app.dataM.QTxRollback()
+//			return err
+//		}
+//	}
+//	stmt.Close()
 
-	//save effect
-	stmt, err = app.dataM.PrepareEffect()
-	if err != nil {
-		app.dataM.QTxRollback()
-		return err
-	}
-	for _, a := range app.blockExeInfo.effectG {
-		for _, e := range a.Effects {
-			e.GetEffectBase().Height = app.currentHeader.Height
-			e.GetEffectBase().ActionID = a.ActionID
-			err = app.dataM.AddEffectDataStmt(stmt, e)
-			if err != nil {
-				app.dataM.QTxRollback()
-				return err
-			}
-		}
-	}
-	stmt.Close()
-	// commit dbtx
-	err = app.dataM.QTxCommit()
-	if err != nil {
-		return err
-	}
+//	save action
+//		stmt, err = app.dataM.PrepareAction()
+//		if err != nil {
+//			app.dataM.QTxRollback()
+//			return err
+//		}
+//		for _, a := range app.blockExeInfo.effectG {
+//			a.Action.GetActionBase().Height = app.currentHeader.Height
+//			err = app.dataM.AddActionDataStmt(stmt, a.Action)
+//			if err != nil {
+//				app.dataM.QTxRollback()
+//				return err
+//			}
+//		}
+//		stmt.Close()
 
+//save effect
+//	stmt, err = app.dataM.PrepareEffect()
+//	if err != nil {
+//		app.dataM.QTxRollback()
+//		return err
+//	}
+//	for _, a := range app.blockExeInfo.effectG {
+//		for _, e := range a.Effects {
+//			e.GetEffectBase().Height = app.currentHeader.Height
+//			e.GetEffectBase().ActionID = a.ActionID
+//			err = app.dataM.AddEffectDataStmt(stmt, e)
+//			if err != nil {
+//				app.dataM.QTxRollback()
+//				return err
+//			}
+//		}
+//	}
+//	//	stmt.Close()
+//	// commit dbtx
+//	err = app.dataM.QTxCommit()
+//	if err != nil {
+//		return err
+//	}
+
+//	return nil
+//}
+
+// SaveDBData save data into sql-db
+func (app *GenesisApp) SaveTxLookupEntries() error {
+	// Write other block data using a batch.
+	batch := app.chainTxDb.NewBatch()
+	app.WriteTxLookupEntries(batch)
+
+	if err := batch.Write(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -578,7 +623,7 @@ func (app *GenesisApp) LoadLastBlock() (lastBlock LastBlockInfo) {
 
 func (app *GenesisApp) SaveLastBlock(appHash []byte, header *types.AppHeader) {
 	lastBlock := LastBlockInfo{
-		Height:    uint64(header.Height.Int64()),
+		Height:    header.Height.Uint64(),
 		StateRoot: header.StateRoot.Bytes(),
 		AppHash:   appHash,
 		TotalCoin: header.TotalCoin.String(),
@@ -591,6 +636,121 @@ func (app *GenesisApp) SaveLastBlock(appHash []byte, header *types.AppHeader) {
 		cmn.PanicCrisis(*err)
 	}
 	app.chainDb.Put(lastBlockKey, buf.Bytes())
+}
+
+// WriteBody storea a block body into the database.
+func (app *GenesisApp) WriteBody(hash []byte, number *big.Int, block *BlockActions) {
+	data, err := rlp.EncodeToBytes(block)
+	if err != nil {
+		logger.Error("Failed to RLP encode body:" + err.Error())
+	}
+	app.WriteBodyRLP(hash, number, data)
+}
+
+// WriteBodyRLP stores an RLP encoded block body into the database.
+func (app *GenesisApp) WriteBodyRLP(hash []byte, number *big.Int, rlp rlp.RawValue) {
+	if err := app.chainDb.Put(blockBodyKey(number.Uint64(), hash), rlp); err != nil {
+		fmt.Println("faild to")
+		logger.Error("Failed to store block body:" + err.Error())
+	}
+}
+
+// ReadBody retrieves the block body corresponding to the hash.
+func (app *GenesisApp) ReadBody(hash []byte, number *big.Int) *BlockActions {
+	data := app.ReadBodyRLP(hash, number)
+	if len(data) == 0 {
+		return nil
+	}
+	var actions BlockActions
+	if err := rlp.DecodeBytes(data, &actions); err != nil {
+		logger.Error("Invalid block body RLP:" + err.Error())
+		return nil
+	}
+	return &actions
+}
+
+// ReadBodyRLP retrieves the block body (transactions and uncles) in RLP encoding.
+func (app *GenesisApp) ReadBodyRLP(hash []byte, number *big.Int) rlp.RawValue {
+	data, err := app.chainDb.Get(blockBodyKey(number.Uint64(), hash))
+	if err != nil {
+		logger.Error("Get data with hash and num error:" + err.Error())
+		return nil
+	}
+	return data
+}
+
+func (app *GenesisApp) SaveLastBlockHeader(appHash []byte, header *types.LedgerHeaderData) {
+	// Write the hash -> number mapping
+	var (
+		number  = header.Height.Uint64()
+		encoded = encodeBlockNumber(number)
+	)
+	key := headerNumberKey(appHash)
+	if err := app.chainDb.Put(key, encoded); err != nil {
+		logger.Error("Failed to store hash to number mapping:" + err.Error())
+	}
+	// Write the encoded header
+	data, err := rlp.EncodeToBytes(header)
+	if err != nil {
+		logger.Error("Failed to RLP encode header:" + err.Error())
+	}
+	key = headerKey(header.Height, appHash)
+	if err := app.chainDb.Put(key, data); err != nil {
+		logger.Error("Failed to store header:" + err.Error())
+	}
+}
+
+// WriteCanonicalHash stores the hash assigned to a canonical block number.
+func (app *GenesisApp) WriteHeaderCanonicalHash(hash []byte, height *big.Int) {
+	if err := app.chainDb.Put(headerHashKey(height), hash); err != nil {
+		logger.Error("Failed to store number to hash mapping:" + err.Error())
+	}
+}
+
+// ReadCanonicalHash retrieves the hash assigned to a canonical block number.
+func (app *GenesisApp) ReadHeaderCanonicalHash(height *big.Int) ethcmn.LedgerHash {
+	data, _ := app.chainDb.Get(headerHashKey(height))
+	if len(data) == 0 {
+		return ethcmn.LedgerHash{}
+	}
+	return ethcmn.BytesToLedgerHash(data)
+}
+
+// WriteTxLookupEntries stores a positional metadata for every transaction from
+// a block, enabling hash based transaction and receipt lookups.
+func (app *GenesisApp) WriteTxLookupEntries(db ethdb.Batch) error {
+	for i, tx := range app.blockExeInfo.TxDatas {
+		entry := TxLookupEntry{
+			BlockHash:  ethcmn.BytesToLedgerHash(app.currentHeader.Hash()),
+			BlockIndex: app.currentHeader.Height.Uint64(),
+			Index:      uint64(i),
+		}
+		data, err := rlp.EncodeToBytes(entry)
+		if err != nil {
+			logger.Error("Failed to encode transaction lookup entry:" + err.Error())
+			return err
+		}
+		if err := db.Put(txLookupKey(tx.TxHash), data); err != nil {
+			logger.Error("Failed to store transaction lookup entry:" + err.Error())
+			return err
+		}
+	}
+	return nil
+}
+
+// ReadTxLookupEntry retrieves the positional metadata associated with a transaction
+// hash to allow retrieving the transaction or receipt by hash.
+func (app *GenesisApp) ReadTxLookupEntry(hash ethcmn.Hash) (ethcmn.LedgerHash, uint64, uint64) {
+	data, _ := app.chainTxDb.Get(txLookupKey(hash))
+	if len(data) == 0 {
+		return ethcmn.LedgerHash{}, 0, 0
+	}
+	var entry TxLookupEntry
+	if err := rlp.DecodeBytes(data, &entry); err != nil {
+		logger.Error("Invalid transaction lookup entry RLP:" + err.Error())
+		return ethcmn.LedgerHash{}, 0, 0
+	}
+	return entry.BlockHash, entry.BlockIndex, entry.Index
 }
 
 func (app *GenesisApp) CheckTx(bs []byte) at.Result {
@@ -710,8 +870,29 @@ func (app *GenesisApp) QueryLedgers(order string, limit uint64, cursor uint64) a
 
 // query ledger info
 func (app *GenesisApp) QueryLedger(height uint64) at.NewRPCResult {
-	sequence := new(big.Int).SetUint64(height)
-	return app.queryLedger(sequence)
+	//	sequence := new(big.Int).SetUint64(height)
+	//	return app.queryLedger(sequence)
+
+	ledgerHash := app.ReadHeaderCanonicalHash(new(big.Int).SetUint64(height))
+	ledgerData := app.ReadHeaderRLP(ledgerHash.Bytes(), height)
+
+	var ledger types.LedgerHeaderData
+	if err := rlp.DecodeBytes(ledgerData, &ledger); err != nil {
+		return at.NewRpcError(at.CodeType_WrongRLP, "fail to rlp decode")
+	}
+	result := types.QueryLedgerHeaderData{
+		LedgerID:         ledger.LedgerID,
+		Height:           ledger.Height,
+		Hash:             ethcmn.ToHex(ledger.Hash.Bytes()),
+		PrevHash:         ethcmn.ToHex(ledger.PrevHash.Bytes()),
+		TransactionCount: ledger.TransactionCount,
+		ClosedAt:         ledger.ClosedAt,
+		TotalCoins:       ledger.TotalCoins,
+		BaseFee:          ledger.BaseFee,
+		MaxTxSetSize:     ledger.MaxTxSetSize,
+	}
+
+	return at.NewRpcResultOK(result, "")
 }
 
 // query all payments
@@ -780,16 +961,30 @@ func (app *GenesisApp) QueryTransaction(txhash string) at.NewRPCResult {
 	}
 
 	hash := ethcmn.HexToHash(txhash)
-	if hash == types.ZERO_HASH || len(hash) != ethcmn.HashLength {
-		return at.NewRpcError(at.CodeType_BaseInvalidInput, "Invalid txhash")
-	}
-	var query types.ActionsQuery
-	query.TxHash = hash
-	query.Begin = 0
-	query.End = 0
-	query.Typei = types.TypeiUndefined
+	//	if hash == types.ZERO_HASH || len(hash) != ethcmn.HashLength {
+	//		return at.NewRpcError(at.CodeType_BaseInvalidInput, "Invalid txhash")
+	//	}
+	//	var query types.ActionsQuery
+	//	query.TxHash = hash
+	//	query.Begin = 0
+	//	query.End = 0
+	//		query.Typei = types.TypeiUndefined
+	//		return app.queryActionsData(query)
 
-	return app.queryActionsData(query)
+	blockHash, blockNumber, txIndex := app.ReadTxLookupEntry(hash)
+
+	if blockHash == (ethcmn.LedgerHash{}) {
+		return at.NewRpcError(at.CodeType_NullData, "No data!")
+	}
+
+	body := app.ReadBody(blockHash.Bytes(), new(big.Int).SetUint64(blockNumber))
+
+	if body == nil || len(body.ActionDatas) <= int(txIndex) {
+		logger.Error("Transactions referenced missing" + txhash)
+		return at.NewRpcError(at.CodeType_InternalError, "Transactions referenced missing")
+	}
+	//	return at.NewRpcResultOK(body.ActionDatas[txIndex], "")
+	return wrapSingleActionResultData(body.ActionDatas[txIndex])
 }
 
 // query account's transactions
@@ -811,8 +1006,13 @@ func (app *GenesisApp) QueryAccountTransactions(address string, order string, li
 
 // query specific ledger's transactions
 func (app *GenesisApp) QueryLedgerTransactions(height uint64, order string, limit uint64, cursor uint64) at.NewRPCResult {
-	heightStr := strconv.FormatUint(height, 10)
-	return app.queryHeightTxs(heightStr, cursor, limit, order)
+	//	heightStr := strconv.FormatUint(height, 10)
+	//	return app.queryHeightTxs(heightStr, cursor, limit, order)
+
+	blockHash := app.ReadHeaderCanonicalHash(new(big.Int).SetUint64(height))
+	body := app.ReadBody(blockHash.Bytes(), new(big.Int).SetUint64(height))
+	//	return at.NewRpcResultOK(body.ActionDatas, "")
+	return wrapActionResultData(body.ActionDatas)
 }
 
 // query contract
@@ -954,4 +1154,42 @@ func (app *GenesisApp) makeCurrentHeader(block *at.Block) *ethtypes.Header {
 		Time:   big.NewInt(block.Header.Time.Unix()),
 		Number: big.NewInt(int64(block.Height)),
 	}
+}
+
+// ReadHeaderRLP retrieves a block header in its raw RLP database encoding.
+func (app *GenesisApp) ReadHeaderRLP(hash []byte, number uint64) rlp.RawValue {
+	data, _ := app.chainDb.Get(headerKey(new(big.Int).SetUint64(number), hash))
+	return data
+}
+
+// encodeBlockNumber encodes a block number as big endian uint64
+func encodeBlockNumber(number uint64) []byte {
+	enc := make([]byte, 8)
+	binary.BigEndian.PutUint64(enc, number)
+	return enc
+}
+
+// headerNumberKey = headerNumberPrefix + hash
+func headerNumberKey(hash []byte) []byte {
+	return append(headerNumberPrefix, hash...)
+}
+
+// headerKey = headerPrefix + num (uint64 big endian) + hash
+func headerKey(height *big.Int, hash []byte) []byte {
+	return append(append(headerPrefix, encodeBlockNumber(height.Uint64())...), hash...)
+}
+
+// headerHashKey = headerPrefix + num (uint64 big endian) + headerHashSuffix
+func headerHashKey(height *big.Int) []byte {
+	return append(append(headerPrefix, encodeBlockNumber(height.Uint64())...), headerHashSuffix...)
+}
+
+// blockBodyKey = blockBodyPrefix + num (uint64 big endian) + hash
+func blockBodyKey(number uint64, hash []byte) []byte {
+	return append(append(blockBodyPrefix, encodeBlockNumber(number)...), hash...)
+}
+
+// txLookupKey = txLookupPrefix + hash
+func txLookupKey(hash ethcmn.Hash) []byte {
+	return append(txLookupPrefix, hash.Bytes()...)
 }
