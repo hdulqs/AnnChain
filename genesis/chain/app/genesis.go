@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math/big"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -104,8 +105,9 @@ type GenesisApp struct {
 
 	blockActions *BlockActions
 
-	chainDb   ethdb.Database // Block Header database
-	chainTxDb ethdb.Database // Block tx database
+	isSqlite3Db bool           // is use sqlite3
+	chainDb     ethdb.Database // Block Header database
+	chainTxDb   ethdb.Database // Block tx database
 
 	tmpStateDup *stateDup
 
@@ -170,14 +172,27 @@ func NewGenesisApp(config cfg.Config, _logger *zap.Logger) *GenesisApp {
 	app := GenesisApp{
 		config: config,
 	}
+	fmt.Println("config db_type:", config.GetString("db_type"))
+	switch config.GetString("db_type") {
+	case database.DBTypeSQLite3:
+		fmt.Println("open sqlite")
+		app.isSqlite3Db = true
+	default:
+		fmt.Println("open leveldb")
+		app.isSqlite3Db = false
+	}
 
-	if app.chainTxDb, err = OpenDatabase(datadir, "chaintxdata", LDatabaseCache, LDatabaseHandles); err != nil {
-		cmn.PanicCrisis(err)
+	if !app.isSqlite3Db {
+		if app.chainTxDb, err = OpenDatabase(datadir, "chaintxdata", LDatabaseCache, LDatabaseHandles); err != nil {
+			cmn.PanicCrisis(err)
+		}
+		app.blockActions = &BlockActions{}
 	}
 
 	if app.chainDb, err = OpenDatabase(datadir, "chaindata", LDatabaseCache, LDatabaseHandles); err != nil {
 		cmn.PanicCrisis(err)
 	}
+
 	lastBlock := app.LoadLastBlock()
 
 	trieRoot := EmptyTrieRoot
@@ -191,7 +206,6 @@ func NewGenesisApp(config cfg.Config, _logger *zap.Logger) *GenesisApp {
 	}
 
 	app.blockExeInfo = &blockExeInfo{}
-	app.blockActions = &BlockActions{}
 
 	lastBlockTotalCoin, _ := big.NewInt(0).SetString(lastBlock.TotalCoin, 10)
 
@@ -236,16 +250,18 @@ func NewGenesisApp(config cfg.Config, _logger *zap.Logger) *GenesisApp {
 
 	}
 	// initialize data manager
-	app.dataM, err = datamanager.NewDataManager(config, _logger, func(dbname string) database.Database {
-		dbi := &basesql.Basesql{}
-		err := dbi.Init(dbname, config, _logger)
+	if app.isSqlite3Db {
+		app.dataM, err = datamanager.NewDataManager(config, _logger, func(dbname string) database.Database {
+			dbi := &basesql.Basesql{}
+			err := dbi.Init(dbname, config, _logger)
+			if err != nil {
+				cmn.PanicCrisis(err)
+			}
+			return dbi
+		})
 		if err != nil {
 			cmn.PanicCrisis(err)
 		}
-		return dbi
-	})
-	if err != nil {
-		cmn.PanicCrisis(err)
 	}
 
 	app.AngineHooks = at.Hooks{
@@ -254,7 +270,11 @@ func NewGenesisApp(config cfg.Config, _logger *zap.Logger) *GenesisApp {
 		OnExecute:  at.NewHook(app.OnExecute),
 	}
 
-	app.opM.Init(app.dataM, &app)
+	if app.isSqlite3Db {
+		app.opM.Init(app.dataM, &app)
+	} else {
+		app.opM.Init(nil, &app)
+	}
 
 	app.txCache = cmn.NewCMap()
 
@@ -269,8 +289,13 @@ func (app *GenesisApp) Start() {
 
 func (app *GenesisApp) Stop() {
 	app.chainDb.Close()
-	app.chainTxDb.Close()
-	//	app.dataM.Close()
+
+	if app.isSqlite3Db {
+		app.dataM.Close()
+	} else {
+		app.chainTxDb.Close()
+	}
+
 }
 
 func (app *GenesisApp) makeTempHeader(block *at.Block) {
@@ -328,6 +353,10 @@ func (app *GenesisApp) CheckSignTx(tx *types.Transaction) at.Result {
 	if err := tx.CheckSig(); err != nil {
 		return at.NewError(at.CodeType_BaseInvalidSignature, err.Error())
 	}
+
+	if !app.isSqlite3Db && tx.GetOpName() == types.OP_S_MANAGEDATA.OpStr() {
+		return at.NewError(at.CodeType_Unsupported, "Unsupported transaction type")
+	}
 	return app.opM.PreCheck(tx)
 }
 
@@ -344,10 +373,12 @@ func (app *GenesisApp) ExecuteTx(stateDup *stateDup, bs []byte) (err error) {
 
 	state := stateDup.state
 
-	// begin db tx
-	if err = app.dataM.OpTxBegin(); err != nil {
-		logger.Warn("Begin database tx failed:" + err.Error())
-		return
+	if app.isSqlite3Db {
+		// begin db tx
+		if err = app.dataM.OpTxBegin(); err != nil {
+			logger.Warn("Begin database tx failed:" + err.Error())
+			return
+		}
 	}
 
 	// begin statedb tx
@@ -368,14 +399,19 @@ func (app *GenesisApp) ExecuteTx(stateDup *stateDup, bs []byte) (err error) {
 	// check executing result
 	if err != nil {
 		state.RevertToSnapshot(stateSnapshot)
-		app.dataM.OpTxRollback() // error is not important here
+		if app.isSqlite3Db {
+			app.dataM.OpTxRollback() // error is not important here
+			app.txCache.Delete(string(bs))
+		}
 		return
 	}
 
-	// commit db tx
-	if err = app.dataM.OpTxCommit(); err != nil {
-		logger.Error("Commit database tx failed:" + err.Error())
-		return
+	if app.isSqlite3Db {
+		// commit db tx
+		if err = app.dataM.OpTxCommit(); err != nil {
+			logger.Error("Commit database tx failed:" + err.Error())
+			return
+		}
 	}
 
 	// Increment the nonce for the next transaction
@@ -384,13 +420,29 @@ func (app *GenesisApp) ExecuteTx(stateDup *stateDup, bs []byte) (err error) {
 	app.txCache.Delete(string(bs))
 
 	// Collect operations and effects
-	action := tx.GetOperatorItfc().GetAction()
+	action, effects := tx.GetOperatorItfc().GetOperationEffects()
 
 	action.GetActionBase().CreateAt = tx.GetCreateTime()
 	action.GetActionBase().TxHash = tx.Hash()
-	action.GetActionBase().Height = app.currentHeader.Height
-	jsonData, err := json.Marshal(action)
-	app.blockActions.ActionDatas = append(app.blockActions.ActionDatas, types.ActionData{ActionID: 0, JSONData: string(jsonData)})
+
+	if app.isSqlite3Db {
+		for idx := range effects {
+			effects[idx].GetEffectBase().CreateAt = tx.GetCreateTime()
+			effects[idx].GetEffectBase().TxHash = tx.Hash()
+		}
+
+		app.blockExeInfo.effectG = append(app.blockExeInfo.effectG, &types.EffectGroup{
+			Action:  action,
+			Effects: effects,
+		})
+	} else {
+		action.GetActionBase().Height = new(big.Int).Add(app.currentHeader.Height, big.NewInt(1))
+		jsonData, err := json.Marshal(action)
+		if err != nil {
+			logger.Error("Marshal action data failed:" + err.Error())
+		}
+		app.blockActions.ActionDatas = append(app.blockActions.ActionDatas, types.ActionData{ActionID: 0, JSONData: string(jsonData)})
+	}
 
 	app.tempHeader.Feepool = app.tempHeader.Feepool.Add(app.tempHeader.Feepool, txData.FeePaid)
 	app.tempHeader.TotalCoin = app.tempHeader.TotalCoin.Sub(app.tempHeader.TotalCoin, txData.FeePaid)
@@ -455,22 +507,27 @@ func (app *GenesisApp) OnCommit(height, round int, block *at.Block) (interface{}
 	app.currentHeader.StateRoot = stateRoot
 
 	appHash := app.currentHeader.Hash()
-
 	app.SaveLastBlock(appHash, app.currentHeader)
-	ledgerHeader := app.currentHeader.GetLedgerHeaderData()
-	err = app.SaveTxLookupEntries()
-	app.WriteHeaderCanonicalHash(appHash, app.currentHeader.Height)
-	app.WriteBody(appHash, app.currentHeader.Height, app.blockActions)
-	app.SaveLastBlockHeader(appHash, ledgerHeader)
 
-	//	err = app.SaveDBData()
+	if app.isSqlite3Db {
+		err = app.SaveDBData()
 
-	if err != nil {
-		logger.Error("Save db data failed:" + err.Error())
+		if err != nil {
+			logger.Error("Save db data failed:" + err.Error())
+		}
+	} else {
+		ledgerHeader := app.currentHeader.GetLedgerHeaderData()
+		err = app.SaveTxLookupEntries()
+		if err != nil {
+			return nil, err
+		}
+		app.WriteHeaderCanonicalHash(appHash, app.currentHeader.Height)
+		app.WriteBody(appHash, app.currentHeader.Height, app.blockActions)
+		app.SaveLastBlockHeader(appHash, ledgerHeader)
+		app.blockActions = &BlockActions{}
 	}
 
 	app.blockExeInfo = &blockExeInfo{}
-	app.blockActions = &BlockActions{}
 
 	app.stateAppMtx.Lock()
 	app.stateApp, err = app.tmpStateDup.state.New(stateRoot)
@@ -515,83 +572,78 @@ func (app *GenesisApp) SaveReceipts(stdup *stateDup) []byte {
 }
 
 // SaveDBData save data into sql-db
-//func (app *GenesisApp) SaveDBData() error {
-//	for _, a := range app.blockExeInfo.effectG {
-//		a.Action.GetActionBase().Height = app.currentHeader.Height
-//		fmt.Println("=========================action:", a.Action)
-//	}
+func (app *GenesisApp) SaveDBData() error {
+	// begin dbtx
+	err := app.dataM.QTxBegin()
+	if err != nil {
+		return err
+	}
 
-// begin dbtx
-//	err := app.dataM.QTxBegin()
-//	if err != nil {
-//		return err
-//	}
+	// Save ledgerheader
+	ledgerHeader := app.currentHeader.GetLedgerHeaderData()
+	_, err = app.dataM.AddLedgerHeaderData(ledgerHeader)
+	if err != nil {
+		app.dataM.QTxRollback()
+		return err
+	}
+	stmt, err := app.dataM.PrepareTransaction()
+	if err != nil {
+		app.dataM.QTxRollback()
+		return err
+	}
+	for _, v := range app.blockExeInfo.TxDatas {
+		v.LedgerHash = ethcmn.BytesToLedgerHash(app.currentHeader.Hash())
+		v.Height = app.currentHeader.Height
+		err = app.dataM.AddTransactionStmt(stmt, v)
+		if err != nil {
+			app.dataM.QTxRollback()
+			return err
+		}
+	}
+	stmt.Close()
 
-// Save ledgerheader
-//	ledgerHeader := app.currentHeader.GetLedgerHeaderData()
-//	_, err = app.dataM.AddLedgerHeaderData(ledgerHeader)
-//	if err != nil {
-//		app.dataM.QTxRollback()
-//		return err
-//	}
-//	stmt, err := app.dataM.PrepareTransaction()
-//	if err != nil {
-//		app.dataM.QTxRollback()
-//		return err
-//	}
-//	for _, v := range app.blockExeInfo.TxDatas {
-//		v.LedgerHash = ethcmn.BytesToLedgerHash(app.currentHeader.Hash())
-//		v.Height = app.currentHeader.Height
-//		err = app.dataM.AddTransactionStmt(stmt, v)
-//		if err != nil {
-//			app.dataM.QTxRollback()
-//			return err
-//		}
-//	}
-//	stmt.Close()
+	// save action
+	stmt, err = app.dataM.PrepareAction()
+	if err != nil {
+		app.dataM.QTxRollback()
+		return err
+	}
+	for _, a := range app.blockExeInfo.effectG {
+		a.Action.GetActionBase().Height = app.currentHeader.Height
+		err = app.dataM.AddActionDataStmt(stmt, a.Action)
+		if err != nil {
+			app.dataM.QTxRollback()
+			return err
+		}
+	}
+	stmt.Close()
 
-//	save action
-//		stmt, err = app.dataM.PrepareAction()
-//		if err != nil {
-//			app.dataM.QTxRollback()
-//			return err
-//		}
-//		for _, a := range app.blockExeInfo.effectG {
-//			a.Action.GetActionBase().Height = app.currentHeader.Height
-//			err = app.dataM.AddActionDataStmt(stmt, a.Action)
-//			if err != nil {
-//				app.dataM.QTxRollback()
-//				return err
-//			}
-//		}
-//		stmt.Close()
+	// save effect
+	stmt, err = app.dataM.PrepareEffect()
+	if err != nil {
+		app.dataM.QTxRollback()
+		return err
+	}
+	for _, a := range app.blockExeInfo.effectG {
+		for _, e := range a.Effects {
+			e.GetEffectBase().Height = app.currentHeader.Height
+			e.GetEffectBase().ActionID = a.ActionID
+			err = app.dataM.AddEffectDataStmt(stmt, e)
+			if err != nil {
+				app.dataM.QTxRollback()
+				return err
+			}
+		}
+	}
+	stmt.Close()
+	// commit dbtx
+	err = app.dataM.QTxCommit()
+	if err != nil {
+		return err
+	}
 
-//save effect
-//	stmt, err = app.dataM.PrepareEffect()
-//	if err != nil {
-//		app.dataM.QTxRollback()
-//		return err
-//	}
-//	for _, a := range app.blockExeInfo.effectG {
-//		for _, e := range a.Effects {
-//			e.GetEffectBase().Height = app.currentHeader.Height
-//			e.GetEffectBase().ActionID = a.ActionID
-//			err = app.dataM.AddEffectDataStmt(stmt, e)
-//			if err != nil {
-//				app.dataM.QTxRollback()
-//				return err
-//			}
-//		}
-//	}
-//	//	stmt.Close()
-//	// commit dbtx
-//	err = app.dataM.QTxCommit()
-//	if err != nil {
-//		return err
-//	}
-
-//	return nil
-//}
+	return nil
+}
 
 // SaveDBData save data into sql-db
 func (app *GenesisApp) SaveTxLookupEntries() error {
@@ -735,6 +787,7 @@ func (app *GenesisApp) WriteTxLookupEntries(db ethdb.Batch) error {
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -815,7 +868,6 @@ func (app *GenesisApp) Info() (resInfo at.ResultInfo) {
 
 // query account's nonce
 func (app *GenesisApp) QueryNonce(address string) at.NewRPCResult {
-
 	account := ethcmn.HexToAddress(address)
 
 	app.stateAppMtx.Lock()
@@ -831,7 +883,6 @@ func (app *GenesisApp) QueryNonce(address string) at.NewRPCResult {
 
 // query accout info
 func (app *GenesisApp) QueryAccount(address string) at.NewRPCResult {
-
 	if !ethcmn.IsHexAddress(address) {
 		return at.NewRpcError(at.CodeType_BaseInvalidInput, "Invalid address")
 	}
@@ -853,26 +904,40 @@ func (app *GenesisApp) QueryAccount(address string) at.NewRPCResult {
 	var show types.ShowAccount
 	accountSO.FillShow(&show)
 	// Default paging query 200, order = desc
-	datas, err := app.dataM.QueryAccData(account, "desc")
-	if err != nil {
-		logger.Warn("[query account],load accdata err:", zap.String("err", err.Error()))
-		return at.NewRpcError(at.CodeType_InternalError, fmt.Sprintf("get accdata fail:%v", err))
+	// query sqlite3
+	if app.isSqlite3Db {
+		datas, err := app.dataM.QueryAccData(account, "desc")
+		if err != nil {
+			logger.Warn("[query account],load accdata err:", zap.String("err", err.Error()))
+			return at.NewRpcError(at.CodeType_InternalError, fmt.Sprintf("get accdata fail:%v", err))
+		}
+		show.Data = datas
+	} else {
+		show.Data = nil
 	}
-	show.Data = datas
 
 	return at.NewRpcResultOK(show, "")
 }
 
 // query all ledger's info
 func (app *GenesisApp) QueryLedgers(order string, limit uint64, cursor uint64) at.NewRPCResult {
-	return app.queryAllLedgers(cursor, limit, order)
+	// query sqlite3
+	if app.isSqlite3Db {
+		return app.queryAllLedgers(cursor, limit, order)
+	}
+
+	return at.NewRpcError(at.CodeType_Unsupported, "Unsupported function in levelDb")
 }
 
 // query ledger info
 func (app *GenesisApp) QueryLedger(height uint64) at.NewRPCResult {
-	//	sequence := new(big.Int).SetUint64(height)
-	//	return app.queryLedger(sequence)
+	// query sqlite3
+	if app.isSqlite3Db {
+		sequence := new(big.Int).SetUint64(height)
+		return app.queryLedger(sequence)
+	}
 
+	// query leveldb
 	ledgerHash := app.ReadHeaderCanonicalHash(new(big.Int).SetUint64(height))
 	ledgerData := app.ReadHeaderRLP(ledgerHash.Bytes(), height)
 
@@ -886,7 +951,7 @@ func (app *GenesisApp) QueryLedger(height uint64) at.NewRPCResult {
 		Hash:             ethcmn.ToHex(ledger.Hash.Bytes()),
 		PrevHash:         ethcmn.ToHex(ledger.PrevHash.Bytes()),
 		TransactionCount: ledger.TransactionCount,
-		ClosedAt:         ledger.ClosedAt,
+		ClosedAt:         new(big.Int).SetUint64(ledger.ClosedAt),
 		TotalCoins:       ledger.TotalCoins,
 		BaseFee:          ledger.BaseFee,
 		MaxTxSetSize:     ledger.MaxTxSetSize,
@@ -897,61 +962,80 @@ func (app *GenesisApp) QueryLedger(height uint64) at.NewRPCResult {
 
 // query all payments
 func (app *GenesisApp) QueryPayments(order string, limit uint64, cursor uint64) at.NewRPCResult {
-	var query types.ActionsQuery
-	query.Order = order
-	query.Limit = limit
-	query.Cursor = cursor
+	// query sqlite3
+	if app.isSqlite3Db {
+		var query types.ActionsQuery
+		query.Order = order
+		query.Limit = limit
+		query.Cursor = cursor
 
-	query.Typei = uint64(types.OP_S_PAYMENT.OpInt())
+		query.Typei = uint64(types.OP_S_PAYMENT.OpInt())
 
-	return app.queryPaymentsData(query)
+		return app.queryPaymentsData(query)
+	}
+	return at.NewRpcError(at.CodeType_Unsupported, "Unsupported function in levelDb")
 }
 
 // query account's payments
 func (app *GenesisApp) QueryAccountPayments(address string, order string, limit uint64, cursor uint64) at.NewRPCResult {
-	if !ethcmn.IsHexAddress(address) {
-		return at.NewRpcError(at.CodeType_BaseInvalidInput, "Invalid address")
+	// query sqlite3
+	if app.isSqlite3Db {
+		if !ethcmn.IsHexAddress(address) {
+			return at.NewRpcError(at.CodeType_BaseInvalidInput, "Invalid address")
+		}
+		if strings.Index(address, "0x") == 0 {
+			address = address[2:]
+		}
+		account := ethcmn.HexToAddress(address)
+
+		var query types.ActionsQuery
+		query.Order = order
+		query.Limit = limit
+		query.Cursor = cursor
+		query.Account = account
+
+		query.Typei = uint64(types.OP_S_PAYMENT.OpInt())
+
+		return app.queryPaymentsData(query)
 	}
-	if strings.Index(address, "0x") == 0 {
-		address = address[2:]
-	}
-	account := ethcmn.HexToAddress(address)
-
-	var query types.ActionsQuery
-	query.Order = order
-	query.Limit = limit
-	query.Cursor = cursor
-	query.Account = account
-
-	query.Typei = uint64(types.OP_S_PAYMENT.OpInt())
-
-	return app.queryPaymentsData(query)
+	// query levelDB
+	return at.NewRpcError(at.CodeType_Unsupported, "Unsupported function in levelDb")
 }
 
 // query payment with txhash
 func (app *GenesisApp) QueryPayment(txhash string) at.NewRPCResult {
-	var query types.ActionsQuery
+	// query sqlite3
+	if app.isSqlite3Db {
+		var query types.ActionsQuery
 
-	if txhash == "" {
-		return at.NewRpcError(at.CodeType_BaseInvalidInput, "Invalid txhash")
+		if txhash == "" {
+			return at.NewRpcError(at.CodeType_BaseInvalidInput, "Invalid txhash")
+		}
+
+		hash := ethcmn.HexToHash(txhash)
+
+		if len(hash) != ethcmn.HashLength {
+			return at.NewRpcError(at.CodeType_BaseInvalidInput, "Invalid txhash")
+		}
+
+		query.TxHash = hash
+		query.Typei = uint64(types.OP_S_PAYMENT.OpInt())
+
+		return app.queryPaymentsData(query)
 	}
-
-	hash := ethcmn.HexToHash(txhash)
-
-	if len(hash) != ethcmn.HashLength {
-		return at.NewRpcError(at.CodeType_BaseInvalidInput, "Invalid txhash")
-	}
-
-	query.TxHash = hash
-	query.Typei = uint64(types.OP_S_PAYMENT.OpInt())
-
-	return app.queryPaymentsData(query)
+	// query levelDB
+	return at.NewRpcError(at.CodeType_Unsupported, "Unsupported function in levelDb")
 }
 
 // query all transactions
 func (app *GenesisApp) QueryTransactions(order string, limit uint64, cursor uint64) at.NewRPCResult {
-	//	var query types.ActionsQuery
-	return app.queryAllTxs(cursor, limit, order)
+	// query sqlite3
+	if app.isSqlite3Db {
+		//	var query types.ActionsQuery
+		return app.queryAllTxs(cursor, limit, order)
+	}
+	// query levelDB
+	return at.NewRpcError(at.CodeType_Unsupported, "Unsupported function in levelDb")
 }
 
 // query transaction with txhash
@@ -959,20 +1043,24 @@ func (app *GenesisApp) QueryTransaction(txhash string) at.NewRPCResult {
 	if txhash == "" {
 		return at.NewRpcError(at.CodeType_BaseInvalidInput, "Invalid txhash")
 	}
-
 	hash := ethcmn.HexToHash(txhash)
-	//	if hash == types.ZERO_HASH || len(hash) != ethcmn.HashLength {
-	//		return at.NewRpcError(at.CodeType_BaseInvalidInput, "Invalid txhash")
-	//	}
-	//	var query types.ActionsQuery
-	//	query.TxHash = hash
-	//	query.Begin = 0
-	//	query.End = 0
-	//		query.Typei = types.TypeiUndefined
-	//		return app.queryActionsData(query)
+	if hash == types.ZERO_HASH || len(hash) != ethcmn.HashLength {
+		return at.NewRpcError(at.CodeType_BaseInvalidInput, "Invalid txhash")
+	}
 
+	// query sqlite3
+	fmt.Println("=================is qt:", app.isSqlite3Db)
+	if app.isSqlite3Db {
+		var query types.ActionsQuery
+		query.TxHash = hash
+		query.Begin = 0
+		query.End = 0
+		query.Typei = types.TypeiUndefined
+		return app.queryActionsData(query)
+	}
+
+	// query leveld
 	blockHash, blockNumber, txIndex := app.ReadTxLookupEntry(hash)
-
 	if blockHash == (ethcmn.LedgerHash{}) {
 		return at.NewRpcError(at.CodeType_NullData, "No data!")
 	}
@@ -983,35 +1071,51 @@ func (app *GenesisApp) QueryTransaction(txhash string) at.NewRPCResult {
 		logger.Error("Transactions referenced missing" + txhash)
 		return at.NewRpcError(at.CodeType_InternalError, "Transactions referenced missing")
 	}
-	//	return at.NewRpcResultOK(body.ActionDatas[txIndex], "")
+
 	return wrapSingleActionResultData(body.ActionDatas[txIndex])
 }
 
 // query account's transactions
 func (app *GenesisApp) QueryAccountTransactions(address string, order string, limit uint64, cursor uint64) at.NewRPCResult {
-	if !ethcmn.IsHexAddress(address) {
-		return at.NewRpcError(at.CodeType_BaseInvalidInput, "Invalid address")
-	}
-	if strings.Index(address, "0x") == 0 {
-		address = address[2:]
-	}
-	account := ethcmn.HexToAddress(address)
+	// query sqlite3
+	if app.isSqlite3Db {
+		if !ethcmn.IsHexAddress(address) {
+			return at.NewRpcError(at.CodeType_BaseInvalidInput, "Invalid address")
+		}
+		if strings.Index(address, "0x") == 0 {
+			address = address[2:]
+		}
+		account := ethcmn.HexToAddress(address)
 
-	if account == types.ZERO_ADDRESS {
-		return at.NewRpcError(at.CodeType_BaseInvalidInput, "Invalid address")
-	}
+		if account == types.ZERO_ADDRESS {
+			return at.NewRpcError(at.CodeType_BaseInvalidInput, "Invalid address")
+		}
 
-	return app.queryAccountTxs(account, cursor, limit, order)
+		return app.queryAccountTxs(account, cursor, limit, order)
+	}
+	// query levelDB
+	return at.NewRpcError(at.CodeType_Unsupported, "Unsupported function in levelDb")
 }
 
 // query specific ledger's transactions
 func (app *GenesisApp) QueryLedgerTransactions(height uint64, order string, limit uint64, cursor uint64) at.NewRPCResult {
-	//	heightStr := strconv.FormatUint(height, 10)
-	//	return app.queryHeightTxs(heightStr, cursor, limit, order)
+	// query sqlite3
+	fmt.Println("===================is:", app.isSqlite3Db)
+	if app.isSqlite3Db {
+		heightStr := strconv.FormatUint(height, 10)
+		return app.queryHeightTxs(heightStr, cursor, limit, order)
+	}
 
+	if height >= app.currentHeader.Height.Uint64() {
+		return at.NewRpcError(at.CodeType_BaseInvalidInput, "Can't exceed the current block height")
+	}
+
+	// query leveldb
 	blockHash := app.ReadHeaderCanonicalHash(new(big.Int).SetUint64(height))
 	body := app.ReadBody(blockHash.Bytes(), new(big.Int).SetUint64(height))
-	//	return at.NewRpcResultOK(body.ActionDatas, "")
+	if body == nil {
+		return at.NewRpcError(at.CodeType_NullData, "No data!")
+	}
 	return wrapActionResultData(body.ActionDatas)
 }
 
@@ -1078,50 +1182,65 @@ func (app *GenesisApp) QueryReceipt(txhash string) at.NewRPCResult {
 
 // query account's all managedata
 func (app *GenesisApp) QueryAccountManagedatas(address string, order string, limit uint64, cursor uint64) at.NewRPCResult {
-	if !ethcmn.IsHexAddress(address) {
-		return at.NewRpcError(at.CodeType_BaseInvalidInput, "Invalid address")
-	}
-	if strings.Index(address, "0x") == 0 {
-		address = address[2:]
-	}
-	account := ethcmn.HexToAddress(address)
+	// query sqlite3
+	if app.isSqlite3Db {
+		if !ethcmn.IsHexAddress(address) {
+			return at.NewRpcError(at.CodeType_BaseInvalidInput, "Invalid address")
+		}
+		if strings.Index(address, "0x") == 0 {
+			address = address[2:]
+		}
+		account := ethcmn.HexToAddress(address)
 
-	if account == types.ZERO_ADDRESS {
-		return at.NewRpcError(at.CodeType_BaseInvalidInput, "Invalid address")
-	}
+		if account == types.ZERO_ADDRESS {
+			return at.NewRpcError(at.CodeType_BaseInvalidInput, "Invalid address")
+		}
 
-	return app.queryAccountManagedata(account, "", "", cursor, limit, order)
+		return app.queryAccountManagedata(account, "", "", cursor, limit, order)
+	}
+	// query levelDB
+	return at.NewRpcError(at.CodeType_Unsupported, "Unsupported function in levelDb")
 }
 
 // query account's managedata for key
 func (app *GenesisApp) QueryAccountManagedata(address string, key string) at.NewRPCResult {
-	if !ethcmn.IsHexAddress(address) {
-		return at.NewRpcError(at.CodeType_BaseInvalidInput, "Invalid address")
-	}
-	if strings.Index(address, "0x") == 0 {
-		address = address[2:]
-	}
-	account := ethcmn.HexToAddress(address)
+	// query sqlite3
+	if app.isSqlite3Db {
+		if !ethcmn.IsHexAddress(address) {
+			return at.NewRpcError(at.CodeType_BaseInvalidInput, "Invalid address")
+		}
+		if strings.Index(address, "0x") == 0 {
+			address = address[2:]
+		}
+		account := ethcmn.HexToAddress(address)
 
-	if account == types.ZERO_ADDRESS {
-		return at.NewRpcError(at.CodeType_BaseInvalidInput, "Invalid address")
+		if account == types.ZERO_ADDRESS {
+			return at.NewRpcError(at.CodeType_BaseInvalidInput, "Invalid address")
+		}
+		return app.queryAccountSingleManageData(account, key)
 	}
-	return app.queryAccountSingleManageData(account, key)
+	// query levelDB
+	return at.NewRpcError(at.CodeType_Unsupported, "Unsupported function in levelDb")
 }
 
 func (app *GenesisApp) QueryAccountCategoryManagedata(address string, category string) at.NewRPCResult {
-	if !ethcmn.IsHexAddress(address) {
-		return at.NewRpcError(at.CodeType_BaseInvalidInput, "Invalid address")
-	}
-	if strings.Index(address, "0x") == 0 {
-		address = address[2:]
-	}
-	account := ethcmn.HexToAddress(address)
+	// query sqlite3
+	if app.isSqlite3Db {
+		if !ethcmn.IsHexAddress(address) {
+			return at.NewRpcError(at.CodeType_BaseInvalidInput, "Invalid address")
+		}
+		if strings.Index(address, "0x") == 0 {
+			address = address[2:]
+		}
+		account := ethcmn.HexToAddress(address)
 
-	if account == types.ZERO_ADDRESS {
-		return at.NewRpcError(at.CodeType_BaseInvalidInput, "Invalid address")
+		if account == types.ZERO_ADDRESS {
+			return at.NewRpcError(at.CodeType_BaseInvalidInput, "Invalid address")
+		}
+		return app.queryAccountCategoryManageData(account, category)
 	}
-	return app.queryAccountCategoryManageData(account, category)
+	// query levelDB
+	return at.NewRpcError(at.CodeType_Unsupported, "Unsupported function in levelDb")
 }
 
 // ParseBaseFee get base fee

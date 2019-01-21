@@ -29,6 +29,7 @@ const (
 	CodeType_EncodingError          CodeType = 8
 	CodeType_AccDataLengthError     CodeType = 9
 	CodeType_AccCategoryLengthError CodeType = 10
+	CodeType_Unsupported            CodeType = 11
 
 	// Reserved for basecoin, 100 ~ 199
 	CodeType_BaseInsufficientFunds CodeType = 101
@@ -55,6 +56,7 @@ var CodeType_name = map[int32]string{
 	8:   "EncodingError",
 	9:   "AccDataLengthError",
 	10:  "AccCategoryLengthError",
+	11:  "UnsupportedFunctionInLevelDB",
 	101: "BaseInsufficientFunds",
 	102: "BaseInvalidInput",
 	103: "BaseInvalidSignature",
@@ -66,26 +68,27 @@ var CodeType_name = map[int32]string{
 	403: "CodeType_BadAmount",
 }
 var CodeType_value = map[string]int32{
-	"OK":                     0,
-	"InternalError":          1,
-	"BadNonce":               2,
-	"InvalidTx":              3,
-	"LowBalance":             4,
-	"RequestTimeout":         5,
-	"EmptyData":              6,
-	"DecodingError":          7,
-	"EncodingError":          8,
-	"AccDataLengthError":     9,
-	"AccCategoryLengthError": 10,
-	"BaseInsufficientFunds":  101,
-	"BaseInvalidInput":       102,
-	"BaseInvalidSignature":   103,
-	"BaseUnknownAddress":     104,
-	"WrongRLP":               105,
-	"SaveFailed":             106,
-	"CodeType_BadLimit":      401,
-	"CodeType_BadPrice":      402,
-	"CodeType_BadAmount":     403,
+	"OK":                           0,
+	"InternalError":                1,
+	"BadNonce":                     2,
+	"InvalidTx":                    3,
+	"LowBalance":                   4,
+	"RequestTimeout":               5,
+	"EmptyData":                    6,
+	"DecodingError":                7,
+	"EncodingError":                8,
+	"AccDataLengthError":           9,
+	"AccCategoryLengthError":       10,
+	"UnsupportedFunctionInLevelDB": 11,
+	"BaseInsufficientFunds":        101,
+	"BaseInvalidInput":             102,
+	"BaseInvalidSignature":         103,
+	"BaseUnknownAddress":           104,
+	"WrongRLP":                     105,
+	"SaveFailed":                   106,
+	"CodeType_BadLimit":            401,
+	"CodeType_BadPrice":            402,
+	"CodeType_BadAmount":           403,
 }
 
 func (x CodeType) String() string {

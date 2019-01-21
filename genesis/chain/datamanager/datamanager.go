@@ -65,7 +65,6 @@ func NewDataManager(cfg config.Config, logger *zap.Logger, dbc DBCreator) (*Data
 		dm.opNeedLock = true
 		dm.qNeedLock = true
 	}
-
 	return dm, nil
 }
 

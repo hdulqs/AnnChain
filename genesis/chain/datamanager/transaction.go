@@ -16,7 +16,6 @@ package datamanager
 
 import (
 	"database/sql"
-	"math/big"
 	"strconv"
 
 	"github.com/dappledger/AnnChain/genesis/chain/database"
@@ -133,7 +132,7 @@ func (m *DataManager) QuerySingleTx(txhash *ethcmn.Hash) (*types.TransactionData
 		TxHash:          ethcmn.HexToHash(r.TxHash),
 		LedgerHash:      ethcmn.StringToLedgerHash(r.LedgerHash),
 		Height:          ethcmn.Big(r.Height),
-		CreateDate:      big.NewInt(r.CreateDate),
+		CreateDate:      uint64(r.CreateDate),
 		Account:         ethcmn.HexToAddress(r.Account),
 		AccountSequence: ethcmn.Big(r.AccountSequence),
 		FeePaid:         ethcmn.Big(r.FeePaid),
@@ -174,7 +173,7 @@ func (m *DataManager) QueryAccountTxs(accid *ethcmn.Address, cursor, limit uint6
 		td := types.TransactionQueryData{
 			Hash:     ethcmn.HexToHash(r.TxHash),
 			Height:   ethcmn.Big(r.Height),
-			CreateAt: r.CreateDate,
+			CreateAt: uint64(r.CreateDate),
 			From:     ethcmn.HexToAddress(r.Account),
 			Target:   ethcmn.HexToAddress(r.Target),
 			Nonce:    ethcmn.Big(r.AccountSequence),
@@ -222,7 +221,7 @@ func (m *DataManager) QueryHeightTxs(height string, cursor, limit uint64, order 
 		td := types.TransactionQueryData{
 			Hash:     ethcmn.HexToHash(r.TxHash),
 			Height:   ethcmn.Big(r.Height),
-			CreateAt: r.CreateDate,
+			CreateAt: uint64(r.CreateDate),
 			From:     ethcmn.HexToAddress(r.Account),
 			Target:   ethcmn.HexToAddress(r.Target),
 			Nonce:    ethcmn.Big(r.AccountSequence),

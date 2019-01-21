@@ -73,7 +73,6 @@ func GetConfig(root string) (conf *config.MapConfig) {
 	if conf, err = config.ReadMapConfigFromFile(configAbs); err != nil {
 		common.Exit(common.Fmt("Could not read config: %v", err))
 	}
-
 	// Set defaults or panic
 	if conf.IsSet("chain_id") {
 		common.Exit("Cannot set 'chain_id' via config.toml")
@@ -83,7 +82,6 @@ func GetConfig(root string) (conf *config.MapConfig) {
 	}
 
 	FillInDefaults(runtime, conf)
-
 	return
 }
 
@@ -145,7 +143,7 @@ func FillInDefaults(root string, conf *config.MapConfig) *config.MapConfig {
 
 	conf.SetDefault("log_path", "")
 
-	conf.Set("db_type", "sqlite3")
+	//	conf.Set("db_type", "sqlite3")
 	conf.Set("db_conn_str", "") // some types of database will need this
 
 	return conf
