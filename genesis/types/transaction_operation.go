@@ -47,3 +47,11 @@ type ExcuteContract struct {
 type QueryContract struct {
 	Payload string `json:"payload"`
 }
+
+type SpencialOp struct {
+	IsCA         bool   `json:"isCA"`
+	ValidatorPub string `json:"validator_pubkey"`
+	Sigs         string `json:"sigs"`
+	OpCode       uint8  `json:"opcode"`
+	RpcAddress   string `json:"rpcaddress"`
+}

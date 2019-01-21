@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 package version
 
 import "strings"
 
 const Maj = "0"
-const Min = "1"
-const Fix = "0"
+const Min = "6"
+const Fix = "1"
 
 const Version = Maj + "." + Min + "." + Fix
 
