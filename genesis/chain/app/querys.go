@@ -71,6 +71,17 @@ func wrapActionResultData(actions []types.ActionData) at.NewRPCResult {
 	return at.NewRpcResultOK(mres, "")
 }
 
+func wrapSingleActionResultData(action types.ActionData) at.NewRPCResult {
+	mres := make(map[string]interface{})
+	err := json.Unmarshal([]byte(action.JSONData), &mres)
+	if err != nil {
+		return at.NewRpcError(at.CodeType_InternalError, err.Error())
+	}
+	mres["id"] = action.ActionID
+
+	return at.NewRpcResultOK(mres, "")
+}
+
 func (app *GenesisApp) queryDoContract(bs []byte) at.NewRPCResult {
 
 	var err error

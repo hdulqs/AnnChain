@@ -25,7 +25,7 @@ const AccCategoryLength = 10
 const TypeiUndefined = 127
 
 type ShowAccount struct {
-	Address string                        `json:"address"`
+	Address string
 	Balance string                        `json:"balance"`
 	Data    map[string]ManageDataCategory `json:"data"`
 }

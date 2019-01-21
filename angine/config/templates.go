@@ -23,6 +23,7 @@ rpc_laddr = "tcp://0.0.0.0:46657"
 moniker = "__MONIKER__"
 fast_sync = true
 db_backend = "leveldb"
+db_type = "leveldb"
 seeds = ""
 signbyCA = ""
 

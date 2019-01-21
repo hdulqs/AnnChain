@@ -39,10 +39,23 @@ type LedgerHeaderData struct {
 	Hash             ethcmn.LedgerHash `json:"hash"`
 	PrevHash         ethcmn.LedgerHash `json:"prev_hash"`
 	TransactionCount uint64            `json:"transaction_count"`
-	ClosedAt         time.Time         `json:"closed_at"`
+	ClosedAt         uint64            `json:"closed_at"`
 	TotalCoins       *big.Int          `json:"total_coins"`
 	BaseFee          *big.Int          `json:"base_fee"`
 	MaxTxSetSize     uint64            `json:"max_tx_set_size"`
+}
+
+// LedgerHeaderData object for app
+type QueryLedgerHeaderData struct {
+	LedgerID         uint64   `json:"id"`
+	Height           *big.Int `json:"height"`
+	Hash             string   `json:"hash"`
+	PrevHash         string   `json:"prev_hash"`
+	TransactionCount uint64   `json:"transaction_count"`
+	ClosedAt         *big.Int `json:"closed_at"`
+	TotalCoins       *big.Int `json:"total_coins"`
+	BaseFee          *big.Int `json:"base_fee"`
+	MaxTxSetSize     uint64   `json:"max_tx_set_size"`
 }
 
 // TransactionData object for app
@@ -50,13 +63,13 @@ type TransactionData struct {
 	TxID            uint64            `json:"txid"`
 	TxHash          ethcmn.Hash       `json:"hash"`
 	LedgerHash      ethcmn.LedgerHash `json:"-"`
-	Height          *big.Int          `json:"ledger"`
-	CreateDate      int64             `json:"created_at"`
-	Account         ethcmn.Address    `json:"account"`
+	Height          *big.Int          `json:"height"`
+	CreateDate      uint64            `json:"created_at"`
+	Account         ethcmn.Address    `json:"from"`
 	Target          ethcmn.Address    `json:"to"`
 	OpType          string            `json:"optype"`
-	AccountSequence *big.Int          `json:"account_sequence"`
-	FeePaid         *big.Int          `json:"fee_paid"`
+	AccountSequence *big.Int          `json:"nonce"`
+	FeePaid         *big.Int          `json:"basefee"`
 	ResultCode      uint              `json:"result_code"`
 	ResultCodes     string            `json:"result_code_s"`
 	Memo            string            `json:"memo"`
@@ -82,7 +95,7 @@ type LedgerHeaderQueryData struct {
 type TransactionQueryData struct {
 	Hash     ethcmn.Hash    `json:"hash"`
 	Height   *big.Int       `json:"height"`
-	CreateAt int64          `json:"created_at"`
+	CreateAt uint64         `json:"created_at"`
 	From     ethcmn.Address `json:"from"`
 	Target   ethcmn.Address `json:"to"`
 	Nonce    *big.Int       `json:"nonce"`
