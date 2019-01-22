@@ -25,6 +25,7 @@ import (
 type OperatorItfc interface {
 	Type() TYPE_OP
 	Bytes() []byte // no error ret
+	GetAction() ActionObject
 	GetOperationEffects() (ActionObject, []EffectObject)
 	GetSourceAccount() ethcmn.Address
 }
@@ -34,6 +35,10 @@ type BaseOp struct {
 	To     ethcmn.Address
 	act    ActionObject
 	efts   []EffectObject
+}
+
+func (bp *BaseOp) GetAction() ActionObject {
+	return bp.act
 }
 
 func (bp *BaseOp) GetOperationEffects() (ActionObject, []EffectObject) {

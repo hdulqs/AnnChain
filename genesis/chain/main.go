@@ -131,6 +131,7 @@ func main() {
 		} else {
 			annConf = acfg.GetConfig("")
 		}
+
 		env := annConf.GetString("environment")
 		logMode := annConf.GetString("log_mode")
 		logpath := ctx.String("log_path")
