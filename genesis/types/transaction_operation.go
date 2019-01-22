@@ -48,10 +48,10 @@ type QueryContract struct {
 	Payload string `json:"payload"`
 }
 
-type SpencialOp struct {
-	IsCA         bool   `json:"isCA"`
-	ValidatorPub string `json:"validator_pubkey"`
-	Sigs         string `json:"sigs"`
-	OpCode       uint8  `json:"opcode"`
-	RpcAddress   string `json:"rpcaddress"`
+type SpecialOp struct {
+	IsCA       bool   `json:"isCA"`
+	Public     string `json:"public"`
+	Sigs       string `json:"sigs"`
+	OpCode     int8   `json:"opcode"`
+	RpcAddress string `json:"rpc_address"`
 }

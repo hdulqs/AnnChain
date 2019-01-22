@@ -300,27 +300,22 @@ func (h *rpcHandler) BroadcastTx(tx []byte) ([]byte, at.CodeType, error) {
 
 func (h *rpcHandler) RequestSpecialOP(tx []byte) ([]byte, at.CodeType, error) {
 
-	var trans types.Transaction
-
-	var tdata types.SpencialOp
-
-	var power uint64
+	var (
+		trans types.Transaction
+		tdata types.SpecialOp
+		power uint64
+	)
 
 	if err := rlp.DecodeBytes(tx, &trans.Data); err != nil {
-		return nil, at.CodeType_WrongRLP, errors.New("wrong rlp encode")
+		return nil, at.CodeType_WrongRLP, fmt.Errorf("transaction rlp decode error:%s", err.Error())
 	}
 
 	if err := trans.CheckSig(); err != nil {
-		return nil, at.CodeType_BaseInvalidSignature, errors.New("check sig fail")
+		return nil, at.CodeType_BaseInvalidSignature, errors.New("transaction check sig failed")
 	}
 
 	if err := json.Unmarshal(trans.GetOperation(), &tdata); err != nil {
-		return nil, at.CodeType_JsonUnmarshalError, errors.New("tx Unmarshal error")
-	}
-
-	if tdata.ValidatorPub == "" {
-		return nil, at.CodeType_ValidatorPubError, errors.New("ValidatorPub Can not be empty")
-
+		return nil, at.CodeType_JsonError, fmt.Errorf("transaction json unmarshal error:%s", err.Error())
 	}
 
 	switch tdata.OpCode {
@@ -329,34 +324,40 @@ func (h *rpcHandler) RequestSpecialOP(tx []byte) ([]byte, at.CodeType, error) {
 	case 0:
 		power = 0
 	default:
-		return nil, at.CodeType_InvalidTx, nil
+		return nil, at.CodeType_InvalidTx, errors.New("specialOp opCode wrong")
 	}
 
-	vb := wire.JSONBytes(at.ValidatorAttr{
-		PubKey:     []byte(tdata.ValidatorPub),
-		Power:      power,
-		IsCA:       tdata.IsCA,
-		RPCAddress: tdata.RpcAddress,
-	})
+	bytPublic, err := at.StringTo32byte(tdata.Public)
+	if err != nil {
+		return nil, at.CodeType_InvalidTx, fmt.Errorf("transaction public error:%s", err.Error())
+	}
 
 	cmd := &at.SpecialOPCmd{
 		CmdCode: at.SpecialOP,
 		CmdType: at.SpecialOP_ChangeValidator,
-		Msg:     vb,
-		Time:    time.Now(),
+		Msg: wire.JSONBytes(at.ValidatorAttr{
+			PubKey:     crypto.PubKeyEd25519(bytPublic).Bytes(),
+			Power:      power,
+			IsCA:       tdata.IsCA,
+			RPCAddress: tdata.RpcAddress,
+		}),
+		Time: time.Now(),
 	}
-	fmt.Println(tdata.Sigs)
+
 	sigb, err := hex.DecodeString(tdata.Sigs)
 	if err != nil {
-		return nil, at.CodeType_InvalidTx, nil
+		return nil, at.CodeType_InvalidTx, fmt.Errorf("hex decode sigs error:%s", err.Error())
 	}
+
 	cmd.Sigs = append(cmd.Sigs, sigb)
 
-	bytCmd, _ := json.Marshal(cmd)
-	cmdbytes := at.TagSpecialOPTx(bytCmd)
+	bytCmd, err := json.Marshal(cmd)
+	if err != nil {
+		return nil, at.CodeType_JsonError, err
+	}
 
-	if err := h.node.Angine.ProcessSpecialOP(cmdbytes); err != nil {
-		return nil, at.CodeType_InvalidTx, errors.New("send Angine tx is invalid")
+	if err := h.node.Angine.ProcessSpecialOP(at.TagSpecialOPTx(bytCmd)); err != nil {
+		return nil, at.CodeType_InvalidTx, fmt.Errorf("angine process tx is error:%s", err.Error())
 	}
 	return nil, at.CodeType_OK, nil
 }

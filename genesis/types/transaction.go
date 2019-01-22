@@ -40,17 +40,8 @@ var (
 	nForBigdata = big.NewInt(5)
 )
 
-type RequestSpecialOP struct {
-	IsCA         bool
-	ValidatorPub string
-	Sigs         string
-	OpCode       uint8
-	RpcAddress   string
-}
-
 type Transaction struct {
 	Data TxData
-	Rso  RequestSpecialOP
 	// caches
 	creatime uint64
 	option   OperatorItfc

@@ -30,7 +30,7 @@ const (
 	CodeType_AccDataLengthError     CodeType = 9
 	CodeType_AccCategoryLengthError CodeType = 10
 	CodeType_ValidatorPubError      CodeType = 11
-	CodeType_JsonUnmarshalError     CodeType = 12
+	CodeType_JsonError              CodeType = 12
 
 	// Reserved for basecoin, 100 ~ 199
 	CodeType_BaseInsufficientFunds CodeType = 101
@@ -58,7 +58,7 @@ var CodeType_name = map[int32]string{
 	9:   "AccDataLengthError",
 	10:  "AccCategoryLengthError",
 	11:  "ValidatorPubError",
-	12:  "JsonUnmarshalError",
+	12:  "JsonError",
 	101: "BaseInsufficientFunds",
 	102: "BaseInvalidInput",
 	103: "BaseInvalidSignature",
@@ -82,7 +82,7 @@ var CodeType_value = map[string]int32{
 	"AccDataLengthError":     9,
 	"AccCategoryLengthError": 10,
 	"ValidatorPubError":      11,
-	"JsonUnmarshalError":     12,
+	"JsonError":              12,
 	"BaseInsufficientFunds":  101,
 	"BaseInvalidInput":       102,
 	"BaseInvalidSignature":   103,
