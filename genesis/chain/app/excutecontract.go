@@ -40,6 +40,10 @@ func (ca *DoExcuteContract) CheckValid(stateDup *stateDup) error {
 		return at.NewError(at.CodeType_BaseUnknownAddress, at.CodeType_BaseUnknownAddress.String())
 	}
 
+	if !stateDup.state.Exist(ca.op.To) {
+		return at.NewError(at.CodeType_BaseUnknownAddress, at.CodeType_BaseUnknownAddress.String())
+	}
+
 	r, ok := new(big.Int).SetString(ca.op.GasLimit, 10)
 	if !ok {
 		panic("invalid hex in source file: " + ca.op.GasLimit)
@@ -59,9 +63,6 @@ func (ca *DoExcuteContract) Apply(stateDup *stateDup) error {
 		err      error
 	)
 
-	if !stateDup.state.Exist(ca.op.Source) || !stateDup.state.Exist(ca.op.To) {
-		return at.NewError(at.CodeType_BaseUnknownAddress, at.CodeType_BaseUnknownAddress.String())
-	}
 	nLimit, err := strconv.ParseInt(ca.op.GasLimit, 10, 64)
 	if err != nil {
 		return at.NewError(at.CodeType_BadLimit, at.CodeType_BadLimit.String())

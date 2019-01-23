@@ -36,10 +36,6 @@ func (ca *DoCreateContract) PreCheck() at.Result {
 
 func (ca *DoCreateContract) CheckValid(stateDup *stateDup) error {
 
-	if len(ca.op.Source.Bytes()) != ethcmn.AddressLength || !stateDup.state.Exist(ca.op.Source) {
-		return at.NewError(at.CodeType_BaseUnknownAddress, at.CodeType_BaseUnknownAddress.String())
-	}
-
 	r, ok := new(big.Int).SetString(ca.op.GasLimit, 10)
 	if !ok {
 		panic("invalid hex in source file: " + ca.op.GasLimit)

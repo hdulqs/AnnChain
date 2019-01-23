@@ -301,7 +301,7 @@ func (app *GenesisApp) CheckSignTx(tx *types.Transaction) at.Result {
 	if err := tx.CheckSig(); err != nil {
 		return at.NewError(at.CodeType_BaseInvalidSignature, err.Error())
 	}
-	return app.opM.PreCheck(tx)
+	return at.NewResultOK(nil, "")
 }
 
 // ExecuteTx execute tx one by one in the loop, without lock, so should always be called between Lock() and Unlock() on the *stateDup
@@ -316,8 +316,6 @@ func (app *GenesisApp) ExecuteTx(stateDup *stateDup, bs []byte) (err error) {
 		return
 	}
 
-	state := stateDup.state
-
 	// begin db tx
 	if err = app.dataM.OpTxBegin(); err != nil {
 		logger.Warn("Begin database tx failed:" + err.Error())
@@ -326,10 +324,10 @@ func (app *GenesisApp) ExecuteTx(stateDup *stateDup, bs []byte) (err error) {
 	}
 
 	// begin statedb tx
-	stateSnapshot := state.Snapshot()
+	stateSnapshot := stateDup.state.Snapshot()
 
 	// take fee first
-	state.SubBalance(tx.GetFrom(), tx.BaseFee(), "tx cost")
+	stateDup.state.SubBalance(tx.GetFrom(), tx.BaseFee(), "tx cost")
 
 	// do execute tx
 	err = app.opM.ExecTx(stateDup, tx)
@@ -341,7 +339,7 @@ func (app *GenesisApp) ExecuteTx(stateDup *stateDup, bs []byte) (err error) {
 
 	// check executing result
 	if err != nil {
-		state.RevertToSnapshot(stateSnapshot)
+		stateDup.state.RevertToSnapshot(stateSnapshot)
 		app.dataM.OpTxRollback() // error is not important here
 		app.txCache.Delete(string(bs))
 		return
@@ -355,7 +353,7 @@ func (app *GenesisApp) ExecuteTx(stateDup *stateDup, bs []byte) (err error) {
 	}
 
 	// Increment the nonce for the next transaction
-	state.SetNonce(tx.GetFrom(), state.GetNonce(tx.GetFrom())+1)
+	stateDup.state.SetNonce(tx.GetFrom(), stateDup.state.GetNonce(tx.GetFrom())+1)
 
 	app.txCache.Delete(string(bs))
 
