@@ -172,7 +172,6 @@ func (h *rpcHandler) BlockchainInfo(minHeight, maxHeight int) (interface{}, at.C
 
 func (h *rpcHandler) Genesis() (interface{}, at.CodeType, error) {
 	gesesis := &at.ResultGenesis{Genesis: h.node.GenesisDoc}
-
 	return &gesesis, at.CodeType_OK, nil
 }
 
@@ -191,6 +190,18 @@ func (h *rpcHandler) Block(height int) (interface{}, at.CodeType, error) {
 
 func (h *rpcHandler) Validators() (interface{}, at.CodeType, error) {
 	height, vs := h.node.Angine.GetValidators()
+	//	var vsarr []*at.QueryValidator
+	//	for _, validatorsValue := range vs {
+	//		valida := &at.QueryValidator{
+	//			Address:     ethcmn.ToHex(validatorsValue.Address),
+	//			PubKey:      validatorsValue.PubKey.KeyString(),
+	//			VotingPower: validatorsValue.VotingPower,
+	//			Accum:       validatorsValue.Accum,
+	//			IsCA:        validatorsValue.IsCA,
+	//			RPCAddress:  validatorsValue.RPCAddress,
+	//		}
+	//		vsarr = append(vsarr, valida)
+	//	}
 	validators := &at.ResultValidators{
 		Validators:  vs,
 		BlockHeight: height,

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"encoding/json"
+
 	. "github.com/dappledger/AnnChain/ann-module/lib/go-common"
 	"github.com/dappledger/AnnChain/ann-module/lib/go-crypto"
 	"github.com/dappledger/AnnChain/ann-module/lib/go-wire"

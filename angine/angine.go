@@ -502,7 +502,7 @@ func (e *Angine) GetP2PNetInfo() (bool, []string, []*types.Peer) {
 
 func (e *Angine) GetNumPeers() int {
 	o, i, d := e.p2pSwitch.NumPeers()
-	return o + i + d
+	return o + i + d + 1
 }
 
 func (e *Angine) GetConsensusStateInfo() (string, []string) {
